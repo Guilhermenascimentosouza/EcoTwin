@@ -1,6 +1,7 @@
 import { supabase } from '../lib/supabaseClient';
 
 export async function fetchMarketListings() {
+  if (!supabase) throw new Error('Supabase is not configured.');
   const { data, error } = await supabase
     .from('digital_twins')
     .select(
@@ -29,6 +30,7 @@ export async function fetchMarketListings() {
 }
 
 export async function setTwinForSale({ twinId, isForSale, askingPrice }) {
+  if (!supabase) throw new Error('Supabase is not configured.');
   const patch = { is_for_sale: isForSale };
   if (typeof askingPrice !== 'undefined') patch.asking_price = askingPrice;
 

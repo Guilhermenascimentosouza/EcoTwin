@@ -2,6 +2,7 @@ import { supabase } from '../lib/supabaseClient';
 
 export async function fetchTwinByDppId({ dppId }) {
   if (!dppId) return null;
+  if (!supabase) throw new Error('Supabase is not configured.');
 
   const { data, error } = await supabase
     .from('products')
@@ -14,6 +15,7 @@ export async function fetchTwinByDppId({ dppId }) {
 }
 
 export async function registerTwinByDppId({ userId, dppId, condition }) {
+  if (!supabase) throw new Error('Supabase is not configured.');
   if (!userId) throw new Error('Not authenticated');
   if (!dppId) throw new Error('Missing DPP ID');
 

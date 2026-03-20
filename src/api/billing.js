@@ -12,6 +12,7 @@ async function authedFetch(url, { accessToken, ...options } = {}) {
 }
 
 export async function createEliteCheckoutSession() {
+  if (!supabase) throw new Error('Supabase is not configured.');
   const { data, error } = await supabase.auth.getSession();
   if (error) throw new Error(error.message);
   const accessToken = data.session?.access_token;
@@ -25,6 +26,7 @@ export async function createEliteCheckoutSession() {
 }
 
 export async function createBillingPortalSession() {
+  if (!supabase) throw new Error('Supabase is not configured.');
   const { data, error } = await supabase.auth.getSession();
   if (error) throw new Error(error.message);
   const accessToken = data.session?.access_token;

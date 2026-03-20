@@ -2,6 +2,7 @@ import { supabase } from '../lib/supabaseClient';
 
 export async function fetchMyProfile({ userId }) {
   if (!userId) return null;
+  if (!supabase) throw new Error('Supabase is not configured.');
 
   const { data, error } = await supabase
     .from('profiles')

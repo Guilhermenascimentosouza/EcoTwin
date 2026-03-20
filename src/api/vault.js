@@ -2,6 +2,7 @@ import { supabase } from '../lib/supabaseClient';
 
 export async function fetchVaultTwins({ userId }) {
   if (!userId) return [];
+  if (!supabase) throw new Error('Supabase is not configured.');
 
   const { data, error } = await supabase
     .from('digital_twins')

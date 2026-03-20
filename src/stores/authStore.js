@@ -10,6 +10,11 @@ export const useAuthStore = create((set, get) => ({
   init: async () => {
     set({ authLoading: true, authError: null });
 
+    if (!supabase) {
+      set({ authLoading: false, authError: 'Supabase is not configured.', session: null, user: null });
+      return;
+    }
+
     const { data, error } = await supabase.auth.getSession();
     if (error) {
       set({ authLoading: false, authError: error.message, session: null, user: null });
@@ -35,6 +40,11 @@ export const useAuthStore = create((set, get) => ({
 
   signOut: async () => {
     set({ authError: null });
+
+    if (!supabase) {
+      set({ authError: 'Supabase is not configured.' });
+      return;
+    }
     const { error } = await supabase.auth.signOut();
     if (error) set({ authError: error.message });
   }

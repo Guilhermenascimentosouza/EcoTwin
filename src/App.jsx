@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { z } from 'zod';
-import { 
-  QrCode, History, TrendingUp, ShieldCheck, ArrowRightLeft, User, Plus,
+import {
   Leaf, LayoutGrid, Search, ChevronRight, ArrowUpRight, Globe, Zap,
   Menu, X, Check, Lock, Shield, Eye, Github, CreditCard
 } from 'lucide-react';
-import { supabase } from './lib/supabaseClient';
+import { supabase, supabaseEnvError } from './lib/supabaseClient';
 import { useAuthStore } from './stores/authStore';
 import { useVaultTwins } from './hooks/useVaultTwins';
 import { useProfile } from './hooks/useProfile';
@@ -125,7 +124,7 @@ const LandingPage = ({ onStart }) => (
           <a href="#" className="hover:text-stone-900">Privacy Policy</a>
           <a href="#" className="hover:text-stone-900">Terms of Service</a>
         </div>
-        <p>© 2026 EcoTwin Technologies AG. All Rights Reserved.</p>
+        <p> 2026 EcoTwin Technologies AG. All Rights Reserved.</p>
       </div>
     </footer>
   </div>
@@ -711,12 +710,27 @@ export default function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setTimeout(() => setLoading(false), 2000);
-  }, []);
-
-  useEffect(() => {
+    const t = setTimeout(() => setLoading(false), 1200);
     init();
+    return () => clearTimeout(t);
   }, [init]);
+
+  if (supabaseEnvError) {
+    return (
+      <div className="h-screen bg-[#FDFCF8] flex items-center justify-center p-8">
+        <div className="w-full max-w-xl bg-white rounded-[2.5rem] p-10 border border-stone-100">
+          <p className="text-[10px] font-bold uppercase tracking-widest text-stone-400">Configuration</p>
+          <h1 className="text-3xl font-light mt-2 text-stone-900">Missing Supabase environment variables</h1>
+          <p className="text-stone-600 mt-4">{supabaseEnvError}</p>
+          <div className="mt-6 text-sm text-stone-500">
+            <p>Configure these on Vercel (Production + Preview):</p>
+            <p className="mt-2 font-mono">VITE_SUPABASE_URL</p>
+            <p className="font-mono">VITE_SUPABASE_ANON_KEY</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (loading || authLoading) {
     return (
@@ -730,6 +744,7 @@ export default function App() {
   }
 
   const handleAuth = async ({ email, password, mode, provider }) => {
+    if (!supabase) throw new Error('Supabase is not configured.');
     if (provider) {
       const { error } = await supabase.auth.signInWithOAuth({
         provider,
