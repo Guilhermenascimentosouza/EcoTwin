@@ -14,7 +14,19 @@
       ]
     },
     {
-      "source": "/(manifest.webmanifest|sw.js|icons/(.*))",
+      "source": "/manifest.webmanifest",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=3600" }
+      ]
+    },
+    {
+      "source": "/sw.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=3600" }
+      ]
+    },
+    {
+      "source": "/icons/(.*)",
       "headers": [
         { "key": "Cache-Control", "value": "public, max-age=3600" }
       ]
