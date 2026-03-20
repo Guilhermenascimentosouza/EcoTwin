@@ -1,0 +1,15 @@
+{
+  "name": "EcoTwin",
+  "short_name": "EcoTwin",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FDFCF8",
+  "theme_color": "#0c0a09",
+  "icons": [
+    {
+      "src": "/icons/icon.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}
