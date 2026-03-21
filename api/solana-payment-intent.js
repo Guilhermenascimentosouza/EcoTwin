@@ -77,6 +77,13 @@ export default async function handler(req, res) {
   const amount = Number(twin.asking_price);
   const serviceFee = Math.round(amount * feePct * 100) / 100;
 
+  await admin
+    .from('crypto_payment_intents')
+    .update({ status: 'expired' })
+    .eq('twin_id', twinId)
+    .eq('buyer_id', buyerId)
+    .eq('status', 'pending');
+
   const { data: intent, error: intentError } = await admin
     .from('crypto_payment_intents')
     .insert({
