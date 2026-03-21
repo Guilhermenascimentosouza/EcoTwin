@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { z } from 'zod';
 import {
   Leaf, LayoutGrid, Search, ChevronRight, ArrowUpRight, Globe, Zap,
-  Menu, X, Check, Lock, Shield, Eye, Github, CreditCard
+  Menu, X, Check, Lock, Shield, Eye, EyeOff, CreditCard
 } from 'lucide-react';
 import { supabase, supabaseEnvError } from './lib/supabaseClient';
 import { useAuthStore } from './stores/authStore';
@@ -121,8 +121,8 @@ const LandingPage = ({ onStart }) => (
     <footer className="py-20 px-6 border-t border-stone-100 text-center">
       <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center text-stone-400 text-xs uppercase tracking-widest font-bold">
         <div className="flex space-x-8 mb-8 md:mb-0">
-          <a href="#" className="hover:text-stone-900">Privacy Policy</a>
-          <a href="#" className="hover:text-stone-900">Terms of Service</a>
+          <a href={`/privacy.html?lang=${i18n.language}`} target="_blank" rel="noreferrer" className="hover:text-stone-900">Privacy Policy</a>
+          <a href={`/terms.html?lang=${i18n.language}`} target="_blank" rel="noreferrer" className="hover:text-stone-900">Terms of Service</a>
         </div>
         <p> 2026 EcoTwin Technologies AG. All Rights Reserved.</p>
       </div>
@@ -134,6 +134,8 @@ function AuthPage({ mode, onAuth, onToggleMode, onBack }) {
   const { t } = useTranslation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [formError, setFormError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -144,6 +146,12 @@ function AuthPage({ mode, onAuth, onToggleMode, onBack }) {
 
   const handleSubmit = async () => {
     setFormError(null);
+
+    if (mode === 'signup' && !acceptedTerms) {
+      setFormError(t('auth.must_accept_terms'));
+      return;
+    }
+
     const parsed = schema.safeParse({ email, password });
     if (!parsed.success) {
       setFormError(parsed.error.issues[0]?.message ?? 'Invalid input.');
@@ -181,8 +189,35 @@ function AuthPage({ mode, onAuth, onToggleMode, onBack }) {
           </div>
           <div className="space-y-1">
             <label className="text-[10px] font-bold uppercase text-stone-400 tracking-widest ml-1">{t('auth.password')}</label>
-            <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" placeholder="••••••••" className="w-full px-6 py-4 rounded-2xl bg-stone-50 border border-stone-100 focus:outline-none focus:ring-1 focus:ring-stone-900 transition-all" />
+            <div className="relative">
+              <input value={password} onChange={(e) => setPassword(e.target.value)} type={showPassword ? 'text' : 'password'} placeholder="••••••••" className="w-full px-6 py-4 pr-14 rounded-2xl bg-stone-50 border border-stone-100 focus:outline-none focus:ring-1 focus:ring-stone-900 transition-all" />
+              <button
+                type="button"
+                aria-label={showPassword ? t('auth.hide_password') : t('auth.show_password')}
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-xl flex items-center justify-center text-stone-400 hover:text-stone-900 hover:bg-white/70 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-stone-900"
+              >
+                {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+              </button>
+            </div>
           </div>
+
+          {mode === 'signup' && (
+            <label className="flex items-start gap-3 pt-1 text-sm text-stone-500 select-none">
+              <input
+                type="checkbox"
+                checked={acceptedTerms}
+                onChange={(e) => setAcceptedTerms(e.target.checked)}
+                className="mt-1 h-4 w-4 rounded border-stone-300 text-stone-900 focus:ring-stone-900"
+              />
+              <span>
+                {t('auth.accept_terms_prefix')}{' '}
+                <a href={`/terms.html?lang=${i18n.language}`} target="_blank" rel="noreferrer" className="underline hover:text-stone-900">{t('auth.terms')}</a>{' '}
+                {t('auth.and')}{' '}
+                <a href={`/privacy.html?lang=${i18n.language}`} target="_blank" rel="noreferrer" className="underline hover:text-stone-900">{t('auth.privacy_policy')}</a>.
+              </span>
+            </label>
+          )}
 
           {formError && (
             <div className="px-5 py-4 rounded-2xl bg-red-50 border border-red-100 text-red-600 text-sm">
@@ -190,20 +225,11 @@ function AuthPage({ mode, onAuth, onToggleMode, onBack }) {
             </div>
           )}
 
-          <Button className="w-full py-4 mt-4" onClick={handleSubmit} disabled={submitting}>
+          <Button className="w-full py-4 mt-4" onClick={handleSubmit} disabled={submitting || (mode === 'signup' && !acceptedTerms)}>
             {mode === 'login' ? t('auth.sign_in') : t('auth.create_account')}
           </Button>
 
-          <div className="grid grid-cols-2 gap-3 pt-2">
-            <Button
-              variant="secondary"
-              className="w-full py-3"
-              aria-label={t('auth.continue_github')}
-              onClick={() => onAuth({ mode, provider: 'github' })}
-              disabled={submitting}
-            >
-              <span className="inline-flex items-center justify-center"><Github className="w-4 h-4 mr-2" /> GitHub</span>
-            </Button>
+          <div className="pt-2">
             <Button
               variant="secondary"
               className="w-full py-3"
@@ -746,6 +772,7 @@ export default function App() {
   const handleAuth = async ({ email, password, mode, provider }) => {
     if (!supabase) throw new Error('Supabase is not configured.');
     if (provider) {
+      if (provider === 'github') throw new Error('Provider not supported.');
       const { error } = await supabase.auth.signInWithOAuth({
         provider,
         options: {
