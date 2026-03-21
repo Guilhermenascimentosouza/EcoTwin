@@ -8,11 +8,13 @@ import {
 import { supabase, supabaseEnvError } from './lib/supabaseClient';
 import { useAuthStore } from './stores/authStore';
 import { useVaultTwins } from './hooks/useVaultTwins';
-import { useProfile } from './hooks/useProfile';
-import { useMarketListings, useSetTwinForSale } from './hooks/useMarketListings';
+import { useProfile, useUpdateProfile } from './hooks/useProfile';
+import { useMarketListings, useSetTwinForSale, useMarketCheckout } from './hooks/useMarketListings';
 import { useRegisterTwin } from './hooks/useRegisterTwin';
 import { useValidateDpp } from './hooks/useValidateDpp';
 import { createBillingPortalSession, createEliteCheckoutSession } from './api/billing';
+import { createConnectOnboardingLink } from './api/connect';
+import { createSolanaPaymentIntent } from './api/solana';
 import { optimizeImageUrl } from './lib/images';
 import { useTranslation } from 'react-i18next';
 import i18n, { LANGUAGES } from './i18n';
@@ -271,10 +273,21 @@ const AppCore = ({ onLogout }) => {
 
   const { data: vaultTwins, isLoading: vaultLoading } = useVaultTwins({ userId: user?.id });
   const { data: profile } = useProfile({ userId: user?.id });
+  const updateProfile = useUpdateProfile({ userId: user?.id });
   const { data: marketListings, isLoading: marketLoading } = useMarketListings();
   const setForSale = useSetTwinForSale();
+  const marketCheckout = useMarketCheckout();
   const registerTwin = useRegisterTwin();
   const validateDpp = useValidateDpp();
+
+  const [solUsdc, setSolUsdc] = useState('');
+  const [solUsdt, setSolUsdt] = useState('');
+
+  useEffect(() => {
+    if (!profile) return;
+    setSolUsdc(profile.solana_usdc_address ?? '');
+    setSolUsdt(profile.solana_usdt_address ?? '');
+  }, [profile?.solana_usdc_address, profile?.solana_usdt_address]);
 
   const vaultProducts = (vaultTwins ?? []).map((t) => ({
     id: t.id,
@@ -638,6 +651,55 @@ const AppCore = ({ onLogout }) => {
                 </Button>
               )}
             </div>
+
+            <div className="mt-4">
+              {!profile?.stripe_connect_account_id ? (
+                <Button
+                  variant="secondary"
+                  className="w-full py-4"
+                  onClick={async () => {
+                    const { url } = await createConnectOnboardingLink();
+                    window.location.href = url;
+                  }}
+                >
+                  Enable Seller Payouts (Stripe Connect)
+                </Button>
+              ) : (
+                <div className="w-full py-4 rounded-2xl bg-white border border-stone-100 text-sm text-stone-600">
+                  Stripe Connect: Connected
+                </div>
+              )}
+            </div>
+
+            <div className="mt-8 text-left">
+              <p className="text-[10px] font-bold uppercase text-stone-400 tracking-widest mb-3">Crypto payout addresses</p>
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold uppercase text-stone-400 tracking-widest ml-1">Solana (USDC)</label>
+                  <input value={solUsdc} onChange={(e) => setSolUsdc(e.target.value)} placeholder="Solana address" className="w-full px-5 py-4 rounded-2xl bg-white border border-stone-100 focus:outline-none focus:ring-1 focus:ring-stone-900 transition-all" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-bold uppercase text-stone-400 tracking-widest ml-1">Solana (USDT)</label>
+                  <input value={solUsdt} onChange={(e) => setSolUsdt(e.target.value)} placeholder="Solana address" className="w-full px-5 py-4 rounded-2xl bg-white border border-stone-100 focus:outline-none focus:ring-1 focus:ring-stone-900 transition-all" />
+                </div>
+              </div>
+
+              <Button
+                variant="secondary"
+                className="w-full py-4 mt-4"
+                onClick={async () => {
+                  await updateProfile.mutateAsync({
+                    patch: {
+                      solana_usdc_address: solUsdc || null,
+                      solana_usdt_address: solUsdt || null
+                    }
+                  });
+                }}
+                disabled={updateProfile.isPending}
+              >
+                {updateProfile.isPending ? t('listing.updating') : 'Save payout addresses'}
+              </Button>
+            </div>
             
             <div className="mt-12 space-y-3 text-left">
               {[
@@ -703,7 +765,14 @@ const AppCore = ({ onLogout }) => {
                     className="w-full py-5 text-lg shadow-xl shadow-stone-900/10"
                     onClick={async () => {
                       const isListed = (marketProducts.find((m) => m.id === selectedProduct.id) != null);
-                      await setForSale.mutateAsync({ twinId: selectedProduct.id, isForSale: !isListed });
+                      if (!isListed) {
+                        const priceStr = window.prompt('Asking price (€)', String(Number(selectedProduct.marketValue ?? 0) || ''));
+                        if (priceStr === null) return;
+                        const askingPrice = Number(priceStr);
+                        await setForSale.mutateAsync({ twinId: selectedProduct.id, isForSale: true, askingPrice });
+                      } else {
+                        await setForSale.mutateAsync({ twinId: selectedProduct.id, isForSale: false, askingPrice: null });
+                      }
                       setSelectedProduct(null);
                     }}
                     disabled={setForSale.isPending}
@@ -711,7 +780,57 @@ const AppCore = ({ onLogout }) => {
                     {setForSale.isPending ? t('listing.updating') : t('listing.toggle')}
                   </Button>
                 ) : (
-                  <Button className="w-full py-5 text-lg shadow-xl shadow-stone-900/10">Transfer Ownership</Button>
+                  <Button
+                    className="w-full py-5 text-lg shadow-xl shadow-stone-900/10"
+                    onClick={async () => {
+                      const price = Number(selectedProduct.marketValue ?? 0);
+                      const ok = window.confirm(`Confirm purchase for €${price}?`);
+                      if (!ok) return;
+                      try {
+                        const { url } = await marketCheckout.mutateAsync({ twinId: selectedProduct.id });
+                        if (!url) throw new Error('Missing checkout url');
+                        window.location.href = url;
+                      } catch (e) {
+                        window.alert(e?.message ?? 'Purchase failed');
+                      }
+                    }}
+                    disabled={marketCheckout.isPending}
+                  >
+                    {marketCheckout.isPending ? t('listing.updating') : `Buy for €${Number(selectedProduct.marketValue ?? 0)}`}
+                  </Button>
+                )}
+
+                {(!selectedProduct.ownerId || selectedProduct.ownerId !== user?.id) && (
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    <Button
+                      variant="secondary"
+                      className="w-full py-4"
+                      onClick={async () => {
+                        try {
+                          const { intent } = await createSolanaPaymentIntent({ twinId: selectedProduct.id, token: 'usdc' });
+                          window.alert(`Pay with Solana USDC\n\nSend: ${intent.amount} USDC\nTo: ${intent.seller_address}\nMemo/Reference: ${intent.reference}\n\nAfter payment is confirmed on-chain, ownership will transfer automatically.`);
+                        } catch (e) {
+                          window.alert(e?.message ?? 'Failed to create Solana payment intent');
+                        }
+                      }}
+                    >
+                      Pay USDC (Solana)
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      className="w-full py-4"
+                      onClick={async () => {
+                        try {
+                          const { intent } = await createSolanaPaymentIntent({ twinId: selectedProduct.id, token: 'usdt' });
+                          window.alert(`Pay with Solana USDT\n\nSend: ${intent.amount} USDT\nTo: ${intent.seller_address}\nMemo/Reference: ${intent.reference}\n\nAfter payment is confirmed on-chain, ownership will transfer automatically.`);
+                        } catch (e) {
+                          window.alert(e?.message ?? 'Failed to create Solana payment intent');
+                        }
+                      }}
+                    >
+                      Pay USDT (Solana)
+                    </Button>
+                  </div>
                 )}
               </div>
             </motion.div>

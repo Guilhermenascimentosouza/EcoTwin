@@ -61,9 +61,53 @@ seller_id UUID REFERENCES auth.users(id),
 buyer_id UUID REFERENCES auth.users(id),
 price DECIMAL(10,2) NOT NULL,
 service_fee DECIMAL(10,2) NOT NULL, -- A sua faturação (ex: 3%)
+stripe_checkout_session_id TEXT,
+stripe_payment_intent_id TEXT,
 status TEXT DEFAULT 'completed',
 created_at TIMESTAMPTZ DEFAULT now()
 );
+
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS stripe_checkout_session_id TEXT;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS stripe_payment_intent_id TEXT;
+
+-- 4b. Crypto payment intents (Solana USDC/USDT)
+CREATE TABLE IF NOT EXISTS crypto_payment_intents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  twin_id UUID REFERENCES digital_twins(id) ON DELETE CASCADE,
+  seller_id UUID REFERENCES auth.users(id),
+  buyer_id UUID REFERENCES auth.users(id),
+  token TEXT NOT NULL CHECK (token IN ('usdc','usdt')),
+  amount DECIMAL(10,2) NOT NULL,
+  platform_fee_pct DECIMAL(5,4) NOT NULL DEFAULT 0.05,
+  service_fee DECIMAL(10,2) NOT NULL DEFAULT 0,
+  seller_address TEXT NOT NULL,
+  reference TEXT UNIQUE NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','completed','expired','failed')),
+  solana_signature TEXT,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  completed_at TIMESTAMPTZ
+);
+
+ALTER TABLE crypto_payment_intents ADD COLUMN IF NOT EXISTS platform_fee_pct DECIMAL(5,4) NOT NULL DEFAULT 0.05;
+ALTER TABLE crypto_payment_intents ADD COLUMN IF NOT EXISTS service_fee DECIMAL(10,2) NOT NULL DEFAULT 0;
+
+ALTER TABLE crypto_payment_intents ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view their own crypto intents" ON crypto_payment_intents;
+CREATE POLICY "Users can view their own crypto intents"
+ON crypto_payment_intents FOR SELECT
+USING ((select auth.uid()) = buyer_id OR (select auth.uid()) = seller_id);
+
+DROP POLICY IF EXISTS "Buyers can create crypto intents" ON crypto_payment_intents;
+CREATE POLICY "Buyers can create crypto intents"
+ON crypto_payment_intents FOR INSERT
+WITH CHECK ((select auth.uid()) = buyer_id);
+
+CREATE INDEX IF NOT EXISTS crypto_payment_intents_twin_id_idx ON crypto_payment_intents (twin_id);
+CREATE INDEX IF NOT EXISTS crypto_payment_intents_seller_id_idx ON crypto_payment_intents (seller_id);
+CREATE INDEX IF NOT EXISTS crypto_payment_intents_buyer_id_idx ON crypto_payment_intents (buyer_id);
+CREATE UNIQUE INDEX IF NOT EXISTS crypto_payment_intents_reference_key ON crypto_payment_intents (reference);
+CREATE UNIQUE INDEX IF NOT EXISTS crypto_payment_intents_solana_signature_key ON crypto_payment_intents (solana_signature);
 
 -- 5. Row Level Security (RLS)
 ALTER TABLE products ENABLE ROW LEVEL SECURITY;
@@ -91,15 +135,27 @@ CREATE TABLE IF NOT EXISTS profiles (
   subscription_tier TEXT NOT NULL DEFAULT 'free' CHECK (subscription_tier IN ('free','elite','brand')),
   stripe_customer_id TEXT,
   stripe_subscription_id TEXT,
+  stripe_connect_account_id TEXT,
+  solana_usdc_address TEXT,
+  solana_usdt_address TEXT,
+  btc_address TEXT,
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now()
 );
 
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS stripe_connect_account_id TEXT;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS solana_usdc_address TEXT;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS solana_usdt_address TEXT;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS btc_address TEXT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS profiles_stripe_customer_id_key ON profiles (stripe_customer_id);
 CREATE UNIQUE INDEX IF NOT EXISTS profiles_stripe_subscription_id_key ON profiles (stripe_subscription_id);
+CREATE UNIQUE INDEX IF NOT EXISTS profiles_stripe_connect_account_id_key ON profiles (stripe_connect_account_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS transactions_stripe_checkout_session_id_key ON transactions (stripe_checkout_session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS transactions_stripe_payment_intent_id_key ON transactions (stripe_payment_intent_id);
 
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 
