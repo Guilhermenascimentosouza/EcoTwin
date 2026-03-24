@@ -1,23 +1,35 @@
-const CACHE_NAME = 'ecotwin-v1';
+const CACHE_NAME = 'ecotwin-v2';
+const PRECACHE_URLS = [
+  '/',
+  '/index.html',
+  '/manifest.webmanifest',
+  '/favicon.svg',
+  '/icons/icon.svg',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png'
+];
 
 self.addEventListener('install', (event) => {
+  self.skipWaiting();
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) =>
-      cache.addAll([
-        '/',
-        '/index.html',
-        '/manifest.webmanifest'
-      ])
-    )
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS)).catch(() => undefined)
   );
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    )
+    (async () => {
+      const keys = await caches.keys();
+      await Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)));
+      await self.clients.claim();
+    })()
   );
+});
+
+self.addEventListener('message', (event) => {
+  if (event?.data?.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener('fetch', (event) => {
@@ -25,18 +37,50 @@ self.addEventListener('fetch', (event) => {
 
   if (request.method !== 'GET') return;
 
-  event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) return cached;
-      return fetch(request)
-        .then((response) => {
+  const url = new URL(request.url);
+  const isSameOrigin = url.origin === self.location.origin;
+
+  const isNavigation = request.mode === 'navigate' || request.headers.get('accept')?.includes('text/html');
+  if (isNavigation) {
+    event.respondWith(
+      (async () => {
+        try {
+          const response = await fetch(request);
           const copy = response.clone();
-          if (request.url.startsWith(self.location.origin)) {
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-          }
+          const cache = await caches.open(CACHE_NAME);
+          cache.put(request, copy);
           return response;
-        })
-        .catch(() => cached)
-    })
+        } catch {
+          const cached = await caches.match(request);
+          return cached || caches.match('/index.html');
+        }
+      })()
+    );
+    return;
+  }
+
+  event.respondWith(
+    (async () => {
+      const cached = await caches.match(request);
+      const fetchAndUpdate = async () => {
+        const response = await fetch(request);
+        if (isSameOrigin) {
+          const cache = await caches.open(CACHE_NAME);
+          cache.put(request, response.clone());
+        }
+        return response;
+      };
+
+      if (cached) {
+        event.waitUntil(fetchAndUpdate().catch(() => undefined));
+        return cached;
+      }
+
+      try {
+        return await fetchAndUpdate();
+      } catch {
+        return cached;
+      }
+    })()
   );
 });
