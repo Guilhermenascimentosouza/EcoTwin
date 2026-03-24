@@ -132,6 +132,39 @@ export default async function handler(req, res) {
 
     if (txError) throw new Error(txError.message);
 
+    const { error: eventError } = await admin
+      .from('events')
+      .insert([
+        {
+          user_id: buyerId,
+          type: 'market.sale.completed',
+          twin_id: twinId,
+          data: {
+            role: 'buyer',
+            seller_id: sellerId,
+            price,
+            service_fee: serviceFee,
+            stripe_checkout_session_id: checkoutSessionId ?? null,
+            stripe_payment_intent_id: paymentIntentId ?? null
+          }
+        },
+        {
+          user_id: sellerId,
+          type: 'market.sale.completed',
+          twin_id: twinId,
+          data: {
+            role: 'seller',
+            buyer_id: buyerId,
+            price,
+            service_fee: serviceFee,
+            stripe_checkout_session_id: checkoutSessionId ?? null,
+            stripe_payment_intent_id: paymentIntentId ?? null
+          }
+        }
+      ]);
+
+    if (eventError) throw new Error(eventError.message);
+
     const { error: updateError } = await admin
       .from('digital_twins')
       .update({

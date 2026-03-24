@@ -53,6 +53,12 @@ asking_price DECIMAL(10,2),
 updated_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- Marketplace normalization: enforce asking_price when item is for sale
+ALTER TABLE digital_twins DROP CONSTRAINT IF EXISTS digital_twins_asking_price_required_when_for_sale;
+ALTER TABLE digital_twins
+  ADD CONSTRAINT digital_twins_asking_price_required_when_for_sale
+  CHECK (is_for_sale = false OR (asking_price IS NOT NULL AND asking_price > 0));
+
 -- 4. Tabela de Transações (Log de Vendas)
 CREATE TABLE IF NOT EXISTS transactions (
 id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -125,7 +131,11 @@ USING ((select auth.uid()) = current_owner_id OR is_for_sale = true);
 DROP POLICY IF EXISTS "Owners can update their twin status" ON digital_twins;
 CREATE POLICY "Owners can update their twin status"
 ON digital_twins FOR UPDATE
-USING ((select auth.uid()) = current_owner_id);
+USING ((select auth.uid()) = current_owner_id)
+WITH CHECK (
+  (select auth.uid()) = current_owner_id
+  AND (is_for_sale = false OR (asking_price IS NOT NULL AND asking_price > 0))
+);
 
 -- 6) User profiles (ties auth.users -> app-level data)
 CREATE TABLE IF NOT EXISTS profiles (
@@ -142,6 +152,32 @@ CREATE TABLE IF NOT EXISTS profiles (
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now()
 );
+
+-- 6b) Minimal telemetry (events)
+CREATE TABLE IF NOT EXISTS events (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  twin_id UUID REFERENCES digital_twins(id) ON DELETE SET NULL,
+  data JSONB DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE events ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view their own events" ON events;
+CREATE POLICY "Users can view their own events"
+ON events FOR SELECT
+USING ((select auth.uid()) = user_id);
+
+DROP POLICY IF EXISTS "Users can insert their own events" ON events;
+CREATE POLICY "Users can insert their own events"
+ON events FOR INSERT
+WITH CHECK ((select auth.uid()) = user_id);
+
+CREATE INDEX IF NOT EXISTS events_user_id_idx ON events (user_id);
+CREATE INDEX IF NOT EXISTS events_twin_id_idx ON events (twin_id);
+CREATE INDEX IF NOT EXISTS events_type_idx ON events (type);
 
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT;
 ALTER TABLE profiles ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT;
@@ -233,6 +269,46 @@ BEGIN
 END;
 $$;
 
+-- 12) Audit/telemetry triggers for marketplace actions
+CREATE OR REPLACE FUNCTION public.log_digital_twin_events()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF (TG_OP = 'UPDATE') THEN
+    IF (NEW.is_for_sale IS DISTINCT FROM OLD.is_for_sale) THEN
+      INSERT INTO public.events (user_id, type, twin_id, data)
+      VALUES (
+        NEW.current_owner_id,
+        CASE WHEN NEW.is_for_sale THEN 'listing.created' ELSE 'listing.removed' END,
+        NEW.id,
+        jsonb_build_object(
+          'asking_price', NEW.asking_price,
+          'previous_asking_price', OLD.asking_price
+        )
+      );
+    END IF;
+
+    IF (NEW.current_owner_id IS DISTINCT FROM OLD.current_owner_id) THEN
+      INSERT INTO public.events (user_id, type, twin_id, data)
+      VALUES (
+        NEW.current_owner_id,
+        'ownership.transferred',
+        NEW.id,
+        jsonb_build_object(
+          'from', OLD.current_owner_id,
+          'to', NEW.current_owner_id
+        )
+      );
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
 -- Performance: add indexes for foreign keys
 CREATE INDEX IF NOT EXISTS digital_twins_current_owner_id_idx ON digital_twins (current_owner_id);
 CREATE INDEX IF NOT EXISTS digital_twins_product_id_idx ON digital_twins (product_id);
@@ -250,3 +326,8 @@ DROP TRIGGER IF EXISTS digital_twins_set_updated_at ON digital_twins;
 CREATE TRIGGER digital_twins_set_updated_at
 BEFORE UPDATE ON digital_twins
 FOR EACH ROW EXECUTE PROCEDURE public.set_updated_at();
+
+DROP TRIGGER IF EXISTS digital_twins_log_events ON digital_twins;
+CREATE TRIGGER digital_twins_log_events
+AFTER UPDATE ON digital_twins
+FOR EACH ROW EXECUTE PROCEDURE public.log_digital_twin_events();

@@ -117,5 +117,28 @@ export default async function handler(req, res) {
     cancel_url: `${origin}/?market=cancel&twin=${encodeURIComponent(twinId)}`
   });
 
-  return json(res, 200, { url: session.url });
+  const pendingPayload = {
+    twin_id: twinId,
+    seller_id: twin.current_owner_id,
+    buyer_id: buyer.id,
+    price,
+    service_fee: Math.round((feeCents / 100) * 100) / 100,
+    status: 'pending',
+    stripe_checkout_session_id: session.id,
+    stripe_payment_intent_id: session.payment_intent ?? null
+  };
+
+  const { error: txError } = await admin
+    .from('transactions')
+    .upsert(pendingPayload, {
+      onConflict: 'stripe_checkout_session_id'
+    });
+
+  if (txError) return json(res, 500, { error: txError.message });
+
+  return json(res, 200, {
+    url: session.url,
+    checkoutSessionId: session.id,
+    paymentIntentId: session.payment_intent ?? null
+  });
 }

@@ -9,6 +9,10 @@ function json(res, status, body) {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
 
+  return json(res, 400, {
+    error: 'Direct ownership transfer is disabled. Use /api/market-checkout-session and complete payment via Stripe to transfer ownership.'
+  });
+
   const supabaseUrl = process.env.SUPABASE_URL;
   const supabaseAnonKey = process.env.SUPABASE_ANON_KEY;
   const serviceRole = process.env.SUPABASE_SERVICE_ROLE_KEY;
