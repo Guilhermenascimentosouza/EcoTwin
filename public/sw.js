@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ecotwin-v2';
+const CACHE_NAME = 'ecotwin-v3';
 const PRECACHE_URLS = [
   '/',
   '/index.html',
