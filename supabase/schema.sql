@@ -53,6 +53,17 @@ asking_price DECIMAL(10,2),
 updated_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- Market value (internal): derived from active marketplace listings
+CREATE OR REPLACE VIEW market_prices_internal AS
+SELECT
+  p.id AS product_id,
+  AVG(dt.asking_price) FILTER (WHERE dt.is_for_sale = true AND dt.asking_price IS NOT NULL AND dt.asking_price > 0) AS avg_price,
+  COUNT(dt.id) FILTER (WHERE dt.is_for_sale = true AND dt.asking_price IS NOT NULL AND dt.asking_price > 0) AS listings_count,
+  MAX(dt.updated_at) FILTER (WHERE dt.is_for_sale = true) AS last_updated
+FROM products p
+LEFT JOIN digital_twins dt ON dt.product_id = p.id
+GROUP BY p.id;
+
 -- Marketplace normalization: enforce asking_price when item is for sale
 ALTER TABLE digital_twins DROP CONSTRAINT IF EXISTS digital_twins_asking_price_required_when_for_sale;
 ALTER TABLE digital_twins

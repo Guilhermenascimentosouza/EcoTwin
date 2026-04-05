@@ -132,7 +132,7 @@ const LandingPage = ({ onStart }) => (
   </div>
 );
 
-function AuthPage({ mode, onAuth, onToggleMode, onBack }) {
+function AuthPage({ mode, onAuth, onToggleMode, onBack, externalError }) {
   const { t } = useTranslation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -221,6 +221,11 @@ function AuthPage({ mode, onAuth, onToggleMode, onBack }) {
             </label>
           )}
 
+          {externalError && (
+            <div className="px-5 py-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-sm">
+              {externalError}
+            </div>
+          )}
           {formError && (
             <div className="px-5 py-4 rounded-2xl bg-red-50 border border-red-100 text-red-600 text-sm">
               {formError}
@@ -853,12 +858,39 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState('landing');
   const { user, authLoading, init, signOut } = useAuthStore();
   const [loading, setLoading] = useState(true);
+  const [authLinkError, setAuthLinkError] = useState(null);
+  const { t } = useTranslation();
 
   useEffect(() => {
     const t = setTimeout(() => setLoading(false), 1200);
     init();
     return () => clearTimeout(t);
   }, [init]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const hash = window.location.hash;
+    if (!hash || hash.length <= 1) return;
+
+    const params = new URLSearchParams(hash.slice(1));
+    const err = params.get('error');
+    const errCode = params.get('error_code');
+    const errDesc = params.get('error_description');
+
+    if (err || errCode || errDesc) {
+      const code = (errCode || err || '').trim();
+
+      const desc = errDesc ? decodeURIComponent(errDesc.replace(/\+/g, ' ')) : null;
+
+      const translated = code ? t(`auth.link_errors.${code}`, { defaultValue: '' }) : '';
+
+      const msg = translated || desc || t('auth.link_errors.default');
+      setAuthLinkError(msg);
+      setCurrentPage('login');
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    }
+  }, []);
 
   if (supabaseEnvError) {
     return (
@@ -926,6 +958,7 @@ export default function App() {
             onBack={() => setCurrentPage('landing')} 
             onAuth={handleAuth}
             onToggleMode={() => setCurrentPage(currentPage === 'login' ? 'signup' : 'login')}
+            externalError={authLinkError}
           />
         </motion.div>
       )}

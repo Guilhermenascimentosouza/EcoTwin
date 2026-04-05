@@ -31,7 +31,13 @@ const resources = {
         must_accept_terms: 'Please accept the Terms of Service and Privacy Policy to create an account.',
         invalid_email: 'Please enter a valid email.',
         password_min: 'Password must be at least 8 characters.',
-        auth_failed: 'Authentication failed.'
+        auth_failed: 'Authentication failed.',
+        link_errors: {
+          default: 'This link is invalid or has expired. Please try again.',
+          otp_expired: 'This confirmation link has expired. Please request a new one.',
+          access_denied: 'Access denied. Please try again.',
+          invalid_request: 'Invalid request. Please try again.'
+        }
       },
       nav: {
         vault: 'Vault',
@@ -117,7 +123,13 @@ const resources = {
         must_accept_terms: 'Veuillez accepter les Conditions d’utilisation et la Politique de confidentialité pour créer un compte.',
         invalid_email: 'Veuillez saisir un e-mail valide.',
         password_min: 'Le mot de passe doit contenir au moins 8 caractères.',
-        auth_failed: 'Échec de l’authentification.'
+        auth_failed: 'Échec de l’authentification.',
+        link_errors: {
+          default: 'Ce lien est invalide ou a expiré. Veuillez réessayer.',
+          otp_expired: 'Ce lien de confirmation a expiré. Veuillez en demander un nouveau.',
+          access_denied: 'Accès refusé. Veuillez réessayer.',
+          invalid_request: 'Requête invalide. Veuillez réessayer.'
+        }
       },
       nav: {
         vault: 'Coffre',
@@ -203,7 +215,13 @@ const resources = {
         must_accept_terms: 'Bitte akzeptiere die Nutzungsbedingungen und Datenschutzerklärung, um ein Konto zu erstellen.',
         invalid_email: 'Bitte eine gültige E-Mail eingeben.',
         password_min: 'Passwort muss mindestens 8 Zeichen haben.',
-        auth_failed: 'Authentifizierung fehlgeschlagen.'
+        auth_failed: 'Authentifizierung fehlgeschlagen.',
+        link_errors: {
+          default: 'Dieser Link ist ungültig oder abgelaufen. Bitte versuche es erneut.',
+          otp_expired: 'Dieser Bestätigungslink ist abgelaufen. Bitte fordere einen neuen an.',
+          access_denied: 'Zugriff verweigert. Bitte versuche es erneut.',
+          invalid_request: 'Ungültige Anfrage. Bitte versuche es erneut.'
+        }
       },
       nav: {
         vault: 'Tresor',
