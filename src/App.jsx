@@ -10,11 +10,13 @@ import { useAuthStore } from './stores/authStore';
 import { useVaultTwins } from './hooks/useVaultTwins';
 import { useProfile, useUpdateProfile } from './hooks/useProfile';
 import { useMarketListings, useSetTwinForSale, useMarketCheckout } from './hooks/useMarketListings';
+import { useMarketPricesInternal } from './hooks/useMarketPricesInternal';
 import { useRegisterTwin } from './hooks/useRegisterTwin';
 import { useValidateDpp } from './hooks/useValidateDpp';
 import { createBillingPortalSession, createEliteCheckoutSession } from './api/billing';
 import { createConnectOnboardingLink } from './api/connect';
 import { createSolanaPaymentIntent } from './api/solana';
+import { logAffiliateClick } from './api/affiliates';
 import { optimizeImageUrl } from './lib/images';
 import { useTranslation } from 'react-i18next';
 import i18n, { LANGUAGES } from './i18n';
@@ -22,11 +24,26 @@ import i18n, { LANGUAGES } from './i18n';
 const ScanOverlay = React.lazy(() => import('./components/ScanOverlay.jsx'));
 const ImpactChart = React.lazy(() => import('./components/ImpactChart.jsx'));
 
+const AFFILIATE_OFFERS = {
+  insurance: {
+    key: 'insurance',
+    label: 'Insurance',
+    provider: 'EcoTwin Partners',
+    url: 'https://example.com/insurance'
+  },
+  restoration: {
+    key: 'restoration',
+    label: 'Restoration',
+    provider: 'EcoTwin Partners',
+    url: 'https://example.com/restoration'
+  }
+};
+
 // --- CONFIG & MOCKS (Global/English) ---
 const MOCK_PRODUCTS = [
-  { id: '1', name: 'Heritage 1954 Watch', brand: 'Vacheron & Co', category: 'Watches', image: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?q=80&w=600&auto=format&fit=crop', marketValue: 12500, change: '+4.2%', condition: 'Mint', carbonSaved: '12kg', idDigital: 'DPP-882-X90' },
-  { id: '2', name: 'Saffiano Leather Bag', brand: 'Prada Paris', category: 'Accessories', image: 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?q=80&w=600&auto=format&fit=crop', marketValue: 2400, change: '-1.5%', condition: 'New', carbonSaved: '8kg', idDigital: 'DPP-771-A12' },
-  { id: '3', name: 'Sustain-X Sneakers', brand: 'EcoStep', category: 'Footwear', image: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=600&auto=format&fit=crop', marketValue: 180, change: '+12%', condition: 'Used', carbonSaved: '25kg', idDigital: 'DPP-112-L99' }
+  { id: '1', name: 'Heritage 1954 Watch', brand: 'Vacheron & Co', category: 'Watches', image: 'https://images.unsplash.com/photo-1523275335684-37898b6baf30?q=80&w=600&auto=format&fit=crop', marketValue: 12500, change: '+4.2%', condition: 'Mint', carbonSaved: '12kg', idDigital: 'DPP-882-X90', productId: '1' },
+  { id: '2', name: 'Saffiano Leather Bag', brand: 'Prada Paris', category: 'Accessories', image: 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?q=80&w=600&auto=format&fit=crop', marketValue: 2400, change: '-1.5%', condition: 'New', carbonSaved: '8kg', idDigital: 'DPP-771-A12', productId: '2' },
+  { id: '3', name: 'Sustain-X Sneakers', brand: 'EcoStep', category: 'Footwear', image: 'https://images.unsplash.com/photo-1542291026-7eec264c27ff?q=80&w=600&auto=format&fit=crop', marketValue: 180, change: '+12%', condition: 'Used', carbonSaved: '25kg', idDigital: 'DPP-112-L99', productId: '3' }
 ];
 
 const MARKET_ITEMS = [
@@ -285,6 +302,23 @@ const AppCore = ({ onLogout }) => {
   const registerTwin = useRegisterTwin();
   const validateDpp = useValidateDpp();
 
+  const productIdsForPricing = useMemo(() => {
+    const ids = [];
+    for (const tw of (vaultTwins ?? [])) ids.push(tw?.product?.id);
+    for (const tw of (marketListings ?? [])) ids.push(tw?.product?.id);
+    return ids.filter(Boolean);
+  }, [vaultTwins, marketListings]);
+
+  const { data: marketPricesInternal } = useMarketPricesInternal({ productIds: productIdsForPricing });
+
+  const marketPriceByProductId = useMemo(() => {
+    const map = new Map();
+    for (const row of (marketPricesInternal ?? [])) {
+      map.set(row.product_id, row);
+    }
+    return map;
+  }, [marketPricesInternal]);
+
   const [solUsdc, setSolUsdc] = useState('');
   const [solUsdt, setSolUsdt] = useState('');
 
@@ -294,40 +328,56 @@ const AppCore = ({ onLogout }) => {
     setSolUsdt(profile.solana_usdt_address ?? '');
   }, [profile?.solana_usdc_address, profile?.solana_usdt_address]);
 
-  const vaultProducts = (vaultTwins ?? []).map((t) => ({
+  const vaultProducts = (vaultTwins ?? []).map((t) => {
+    const priceRow = marketPriceByProductId.get(t.product?.id);
+    const marketValue = Number(priceRow?.avg_price ?? 0);
+    return {
     id: t.id,
+    productId: t.product?.id ?? null,
     name: t.product?.name ?? 'Unnamed Item',
     brand: t.product?.brand?.name ?? 'Unknown Brand',
     category: t.product?.category ?? 'Unknown',
     image: t.product?.image_url ?? '',
-    marketValue: Number(t.asking_price ?? 0),
+    marketValue,
     change: '+0%',
     condition: t.condition ?? 'Used',
     carbonSavedKg: Number(t.carbon_saved_kg ?? 0),
     carbonSaved: `${Number(t.carbon_saved_kg ?? 0)}kg`,
     idDigital: t.product?.dpp_id ?? '',
     ownerId: user?.id ?? null,
-    updatedAt: t.updated_at
-  }));
+    updatedAt: t.updated_at,
+    marketLastUpdated: priceRow?.last_updated ?? null,
+    marketListingsCount: Number(priceRow?.listings_count ?? 0)
+  };
+  });
 
   const vaultProductsToRender = vaultProducts.length > 0 ? vaultProducts : MOCK_PRODUCTS;
   const isFreeTier = (profile?.subscription_tier ?? 'free') === 'free';
   const vaultCount = (vaultTwins ?? []).length;
 
-  const marketProducts = (marketListings ?? []).map((t) => ({
+  const marketProducts = (marketListings ?? []).map((t) => {
+    const priceRow = marketPriceByProductId.get(t.product?.id);
+    const marketValue = Number(priceRow?.avg_price ?? 0);
+    const listingPrice = Number(t.asking_price ?? 0);
+    return {
     id: t.id,
+    productId: t.product?.id ?? null,
     name: t.product?.name ?? 'Unnamed Item',
     brand: t.product?.brand?.name ?? 'Unknown Brand',
     category: t.product?.category ?? 'Unknown',
     image: t.product?.image_url ?? '',
-    marketValue: Number(t.asking_price ?? 0),
+    marketValue,
+    listingPrice,
     change: '+0%',
     condition: t.condition ?? 'Used',
     carbonSavedKg: Number(t.carbon_saved_kg ?? 0),
     carbonSaved: `${Number(t.carbon_saved_kg ?? 0)}kg`,
     idDigital: t.product?.dpp_id ?? '',
-    ownerId: t.current_owner_id
-  }));
+    ownerId: t.current_owner_id,
+    marketLastUpdated: priceRow?.last_updated ?? null,
+    marketListingsCount: Number(priceRow?.listings_count ?? 0)
+  };
+  });
 
   const impactTotalKg = (vaultTwins ?? []).reduce((acc, t) => acc + Number(t.carbon_saved_kg ?? 0), 0);
   const impactChartData = (vaultTwins ?? [])
@@ -788,7 +838,7 @@ const AppCore = ({ onLogout }) => {
                   <Button
                     className="w-full py-5 text-lg shadow-xl shadow-stone-900/10"
                     onClick={async () => {
-                      const price = Number(selectedProduct.marketValue ?? 0);
+                      const price = Number(selectedProduct.listingPrice ?? selectedProduct.marketValue ?? 0);
                       const ok = window.confirm(`Confirm purchase for €${price}?`);
                       if (!ok) return;
                       try {
@@ -801,9 +851,56 @@ const AppCore = ({ onLogout }) => {
                     }}
                     disabled={marketCheckout.isPending}
                   >
-                    {marketCheckout.isPending ? t('listing.updating') : `Buy for €${Number(selectedProduct.marketValue ?? 0)}`}
+                    {marketCheckout.isPending ? t('listing.updating') : `Buy for €${Number(selectedProduct.listingPrice ?? selectedProduct.marketValue ?? 0)}`}
                   </Button>
                 )}
+
+                <div className="mt-3 grid grid-cols-2 gap-3">
+                  <Button
+                    variant="secondary"
+                    className="w-full py-4"
+                    onClick={async () => {
+                      try {
+                        const offer = AFFILIATE_OFFERS.insurance;
+                        await logAffiliateClick({
+                          userId: user?.id ?? null,
+                          twinId: selectedProduct.id,
+                          productId: selectedProduct.productId ?? null,
+                          offerKey: offer.key,
+                          offerProvider: offer.provider,
+                          offerUrl: offer.url
+                        });
+                        window.open(offer.url, '_blank', 'noopener,noreferrer');
+                      } catch (e) {
+                        window.alert(e?.message ?? 'Failed to open affiliate offer');
+                      }
+                    }}
+                  >
+                    {AFFILIATE_OFFERS.insurance.label}
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    className="w-full py-4"
+                    onClick={async () => {
+                      try {
+                        const offer = AFFILIATE_OFFERS.restoration;
+                        await logAffiliateClick({
+                          userId: user?.id ?? null,
+                          twinId: selectedProduct.id,
+                          productId: selectedProduct.productId ?? null,
+                          offerKey: offer.key,
+                          offerProvider: offer.provider,
+                          offerUrl: offer.url
+                        });
+                        window.open(offer.url, '_blank', 'noopener,noreferrer');
+                      } catch (e) {
+                        window.alert(e?.message ?? 'Failed to open affiliate offer');
+                      }
+                    }}
+                  >
+                    {AFFILIATE_OFFERS.restoration.label}
+                  </Button>
+                </div>
 
                 {(!selectedProduct.ownerId || selectedProduct.ownerId !== user?.id) && (
                   <div className="mt-3 grid grid-cols-2 gap-3">

@@ -14,6 +14,46 @@ api_key TEXT UNIQUE DEFAULT encode(gen_random_bytes(32), 'hex'),
 created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- 1b) B2B API keys (hashed)
+CREATE TABLE IF NOT EXISTS b2b_api_keys (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id UUID REFERENCES brands(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  key_prefix TEXT NOT NULL,
+  key_hash TEXT NOT NULL,
+  scopes JSONB NOT NULL DEFAULT '[]'::jsonb,
+  active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS b2b_api_keys_key_hash_key ON b2b_api_keys (key_hash);
+CREATE INDEX IF NOT EXISTS b2b_api_keys_brand_id_idx ON b2b_api_keys (brand_id);
+CREATE INDEX IF NOT EXISTS b2b_api_keys_key_prefix_idx ON b2b_api_keys (key_prefix);
+
+-- 1c) B2B audit logs
+CREATE TABLE IF NOT EXISTS b2b_audit_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  brand_id UUID REFERENCES brands(id) ON DELETE CASCADE,
+  api_key_id UUID REFERENCES b2b_api_keys(id) ON DELETE SET NULL,
+  action TEXT NOT NULL,
+  request_id TEXT,
+  ip TEXT,
+  user_agent TEXT,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS b2b_audit_logs_brand_id_idx ON b2b_audit_logs (brand_id);
+CREATE INDEX IF NOT EXISTS b2b_audit_logs_api_key_id_idx ON b2b_audit_logs (api_key_id);
+CREATE INDEX IF NOT EXISTS b2b_audit_logs_action_idx ON b2b_audit_logs (action);
+
+ALTER TABLE b2b_api_keys ENABLE ROW LEVEL SECURITY;
+ALTER TABLE b2b_audit_logs ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON TABLE b2b_api_keys FROM anon, authenticated;
+REVOKE ALL ON TABLE b2b_audit_logs FROM anon, authenticated;
+
 -- Brands: enable RLS + avoid exposing api_key via API
 ALTER TABLE brands ENABLE ROW LEVEL SECURITY;
 
@@ -169,22 +209,23 @@ CREATE TABLE IF NOT EXISTS events (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
   type TEXT NOT NULL,
-  twin_id UUID REFERENCES digital_twins(id) ON DELETE SET NULL,
-  data JSONB DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ DEFAULT now()
+  twin_id UUID,
+  product_id UUID,
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 ALTER TABLE events ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Anyone can insert their own events" ON events;
+CREATE POLICY "Anyone can insert their own events"
+ON events FOR INSERT
+WITH CHECK (user_id IS NULL OR (select auth.uid()) = user_id);
 
 DROP POLICY IF EXISTS "Users can view their own events" ON events;
 CREATE POLICY "Users can view their own events"
 ON events FOR SELECT
 USING ((select auth.uid()) = user_id);
-
-DROP POLICY IF EXISTS "Users can insert their own events" ON events;
-CREATE POLICY "Users can insert their own events"
-ON events FOR INSERT
-WITH CHECK ((select auth.uid()) = user_id);
 
 CREATE INDEX IF NOT EXISTS events_user_id_idx ON events (user_id);
 CREATE INDEX IF NOT EXISTS events_twin_id_idx ON events (twin_id);
@@ -342,3 +383,116 @@ DROP TRIGGER IF EXISTS digital_twins_log_events ON digital_twins;
 CREATE TRIGGER digital_twins_log_events
 AFTER UPDATE ON digital_twins
 FOR EACH ROW EXECUTE PROCEDURE public.log_digital_twin_events();
+
+CREATE TABLE IF NOT EXISTS auctions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  twin_id UUID REFERENCES digital_twins(id) ON DELETE CASCADE,
+  seller_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'scheduled',
+  starts_at TIMESTAMPTZ NOT NULL,
+  ends_at TIMESTAMPTZ NOT NULL,
+  reserve_price DECIMAL(10,2),
+  min_increment DECIMAL(10,2) NOT NULL DEFAULT 1,
+  current_price DECIMAL(10,2) NOT NULL DEFAULT 0,
+  current_winner_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS auctions_twin_id_idx ON auctions (twin_id);
+CREATE INDEX IF NOT EXISTS auctions_status_idx ON auctions (status);
+CREATE INDEX IF NOT EXISTS auctions_ends_at_idx ON auctions (ends_at);
+
+CREATE TABLE IF NOT EXISTS bids (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  auction_id UUID REFERENCES auctions(id) ON DELETE CASCADE,
+  bidder_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+  amount DECIMAL(10,2) NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS bids_auction_id_created_at_idx ON bids (auction_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS bids_bidder_id_idx ON bids (bidder_id);
+
+ALTER TABLE auctions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bids ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Anyone can view auctions" ON auctions;
+CREATE POLICY "Anyone can view auctions"
+ON auctions FOR SELECT
+USING (true);
+
+DROP POLICY IF EXISTS "Anyone can view bids" ON bids;
+CREATE POLICY "Anyone can view bids"
+ON bids FOR SELECT
+USING (true);
+
+CREATE OR REPLACE FUNCTION public.place_bid(p_auction_id uuid, p_amount numeric)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+DECLARE
+  v_uid uuid;
+  v_auction auctions%rowtype;
+  v_min numeric;
+  v_new_ends_at timestamptz;
+  v_sniper_window interval := interval '30 seconds';
+BEGIN
+  v_uid := auth.uid();
+  IF v_uid IS NULL THEN
+    RAISE EXCEPTION 'Not authenticated';
+  END IF;
+  IF p_amount IS NULL OR p_amount <= 0 THEN
+    RAISE EXCEPTION 'Invalid bid amount';
+  END IF;
+
+  SELECT * INTO v_auction
+  FROM public.auctions
+  WHERE id = p_auction_id
+  FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Auction not found';
+  END IF;
+
+  IF v_auction.status <> 'live' THEN
+    RAISE EXCEPTION 'Auction is not live';
+  END IF;
+  IF now() < v_auction.starts_at THEN
+    RAISE EXCEPTION 'Auction has not started';
+  END IF;
+  IF now() >= v_auction.ends_at THEN
+    RAISE EXCEPTION 'Auction has ended';
+  END IF;
+
+  v_min := GREATEST(v_auction.current_price + v_auction.min_increment, COALESCE(v_auction.reserve_price, 0));
+  IF p_amount < v_min THEN
+    RAISE EXCEPTION 'Bid too low';
+  END IF;
+
+  INSERT INTO public.bids (auction_id, bidder_id, amount)
+  VALUES (p_auction_id, v_uid, p_amount);
+
+  v_new_ends_at := v_auction.ends_at;
+  IF (v_auction.ends_at - now()) <= v_sniper_window THEN
+    v_new_ends_at := v_auction.ends_at + v_sniper_window;
+  END IF;
+
+  UPDATE public.auctions
+  SET current_price = p_amount,
+      current_winner_id = v_uid,
+      ends_at = v_new_ends_at,
+      updated_at = now()
+  WHERE id = p_auction_id;
+
+  RETURN jsonb_build_object(
+    'ok', true,
+    'auction_id', p_auction_id,
+    'current_price', p_amount,
+    'current_winner_id', v_uid,
+    'ends_at', v_new_ends_at
+  );
+END;
+$$;
