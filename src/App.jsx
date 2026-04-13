@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { z } from 'zod';
 import {
   Leaf, LayoutGrid, Search, ChevronRight, ArrowUpRight, Globe, Zap,
-  Menu, X, Check, Lock, Shield, Eye, EyeOff, CreditCard
+  Menu, X, Check, Lock, Shield, Eye, EyeOff, CreditCard, Gavel
 } from 'lucide-react';
 import { supabase, supabaseEnvError } from './lib/supabaseClient';
 import { useAuthStore } from './stores/authStore';
@@ -11,6 +11,7 @@ import { useVaultTwins } from './hooks/useVaultTwins';
 import { useProfile, useUpdateProfile } from './hooks/useProfile';
 import { useMarketListings, useSetTwinForSale, useMarketCheckout } from './hooks/useMarketListings';
 import { useMarketPricesInternal } from './hooks/useMarketPricesInternal';
+import { useBids, useLiveAuctions, usePlaceBid } from './hooks/useAuctions';
 import { useRegisterTwin } from './hooks/useRegisterTwin';
 import { useValidateDpp } from './hooks/useValidateDpp';
 import { createBillingPortalSession, createEliteCheckoutSession } from './api/billing';
@@ -290,6 +291,7 @@ const AppCore = ({ onLogout }) => {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState('vault');
   const [selectedProduct, setSelectedProduct] = useState(null);
+  const [selectedAuctionId, setSelectedAuctionId] = useState(null);
   const [showAddItem, setShowAddItem] = useState(false);
   const user = useAuthStore((s) => s.user);
 
@@ -301,6 +303,12 @@ const AppCore = ({ onLogout }) => {
   const marketCheckout = useMarketCheckout();
   const registerTwin = useRegisterTwin();
   const validateDpp = useValidateDpp();
+
+  const { data: liveAuctions, isLoading: auctionsLoading } = useLiveAuctions();
+  const placeBidMutation = usePlaceBid();
+  const { data: bids } = useBids({ auctionId: selectedAuctionId });
+
+  const selectedAuction = (liveAuctions ?? []).find((a) => a.id === selectedAuctionId) ?? null;
 
   const productIdsForPricing = useMemo(() => {
     const ids = [];
@@ -487,6 +495,9 @@ const AppCore = ({ onLogout }) => {
       <button type="button" aria-label={t('nav.market')} onClick={() => setActiveTab('market')} className="focus:outline-none focus-visible:ring-2 focus-visible:ring-stone-900 rounded-lg">
         <Globe className={`w-6 h-6 transition-colors ${activeTab === 'market' ? 'text-stone-900' : 'text-stone-300 hover:text-stone-500'}`} />
       </button>
+      <button type="button" aria-label={t('nav.auction')} onClick={() => setActiveTab('auction')} className="focus:outline-none focus-visible:ring-2 focus-visible:ring-stone-900 rounded-lg">
+        <Gavel className={`w-6 h-6 transition-colors ${activeTab === 'auction' ? 'text-stone-900' : 'text-stone-300 hover:text-stone-500'}`} />
+      </button>
       <button type="button" aria-label={t('nav.scan')} onClick={() => setActiveTab('scan')} className="bg-stone-900 p-3 rounded-full -mt-12 shadow-2xl border-4 border-[#FDFCF8] cursor-pointer hover:scale-110 active:scale-95 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-white">
         <QrCode className="text-white w-6 h-6" />
       </button>
@@ -578,6 +589,128 @@ const AppCore = ({ onLogout }) => {
                 </motion.div>
               ))}
             </div>
+          </motion.div>
+        )}
+
+        {activeTab === 'auction' && (
+          <motion.div key="a" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="p-6 pt-12">
+            <div className="flex items-center justify-between mb-8">
+              <h1 className="text-3xl font-light">Live Auction</h1>
+              {selectedAuctionId && (
+                <Button variant="secondary" onClick={() => setSelectedAuctionId(null)}>
+                  {t('common.back_to_home')}
+                </Button>
+              )}
+            </div>
+
+            {auctionsLoading && (
+              <div className="mb-6 bg-white border border-stone-100 rounded-[2rem] px-6 py-5 text-sm text-stone-500">{t('common.loading')}</div>
+            )}
+
+            {!selectedAuctionId && (
+              <div className="grid md:grid-cols-2 gap-6">
+                {(liveAuctions ?? []).map((a) => {
+                  const name = a.twin?.product?.name ?? 'Auction item';
+                  const brand = a.twin?.product?.brand?.name ?? '';
+                  const image = a.twin?.product?.image_url ?? '';
+                  const price = Number(a.current_price ?? 0);
+                  const endsAt = a.ends_at ? new Date(a.ends_at) : null;
+                  const endsIn = endsAt ? Math.max(0, endsAt.getTime() - Date.now()) : null;
+
+                  return (
+                    <button
+                      key={a.id}
+                      type="button"
+                      onClick={() => setSelectedAuctionId(a.id)}
+                      className="text-left bg-white rounded-[2.5rem] border border-stone-100 overflow-hidden shadow-sm hover:shadow-xl transition-all"
+                    >
+                      <div className="h-44 overflow-hidden bg-stone-100">
+                        {image ? (
+                          <img loading="lazy" decoding="async" src={optimizeImageUrl(image, { width: 800 })} className="w-full h-full object-cover" />
+                        ) : (
+                          <div className="w-full h-full bg-stone-100" />
+                        )}
+                      </div>
+                      <div className="p-6">
+                        <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">{brand}</p>
+                        <p className="text-lg font-medium mt-1">{name}</p>
+                        <div className="mt-4 flex items-end justify-between">
+                          <div>
+                            <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Current bid</p>
+                            <p className="text-2xl font-semibold">€{price}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Ends</p>
+                            <p className="text-sm text-stone-700">
+                              {endsIn == null ? '—' : `${Math.ceil(endsIn / 1000)}s`}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+                {(liveAuctions ?? []).length === 0 && !auctionsLoading && (
+                  <div className="bg-white border border-stone-100 rounded-[2rem] px-6 py-5 text-sm text-stone-500">
+                    No live auctions.
+                  </div>
+                )}
+              </div>
+            )}
+
+            {selectedAuctionId && selectedAuction && (
+              <div className="bg-white border border-stone-100 rounded-[2.5rem] p-8">
+                <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">{selectedAuction.twin?.product?.brand?.name ?? ''}</p>
+                <h2 className="text-2xl font-light mt-1">{selectedAuction.twin?.product?.name ?? 'Auction item'}</h2>
+                <div className="mt-6 grid grid-cols-2 gap-4">
+                  <div className="p-6 bg-stone-50 rounded-3xl">
+                    <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Current</p>
+                    <p className="text-3xl font-light">€{Number(selectedAuction.current_price ?? 0)}</p>
+                  </div>
+                  <div className="p-6 bg-stone-50 rounded-3xl">
+                    <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Min increment</p>
+                    <p className="text-3xl font-light">€{Number(selectedAuction.min_increment ?? 0)}</p>
+                  </div>
+                </div>
+
+                <div className="mt-6">
+                  <Button
+                    className="w-full py-5 text-lg shadow-xl shadow-stone-900/10"
+                    onClick={async () => {
+                      const current = Number(selectedAuction.current_price ?? 0);
+                      const inc = Number(selectedAuction.min_increment ?? 1);
+                      const suggested = current + inc;
+                      const amountStr = window.prompt('Your bid (€)', String(suggested));
+                      if (amountStr === null) return;
+                      const amount = Number(amountStr);
+                      try {
+                        await placeBidMutation.mutateAsync({ auctionId: selectedAuction.id, amount });
+                      } catch (e) {
+                        window.alert(e?.message ?? 'Failed to place bid');
+                      }
+                    }}
+                    disabled={placeBidMutation.isPending}
+                  >
+                    {placeBidMutation.isPending ? 'Placing…' : 'Place bid'}
+                  </Button>
+                </div>
+
+                <div className="mt-8">
+                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-widest mb-3">Latest bids</p>
+                  <div className="space-y-2">
+                    {(bids ?? []).map((b) => (
+                      <div key={b.id} className="flex justify-between bg-stone-50 rounded-2xl px-5 py-4">
+                        <span className="text-sm text-stone-600">{String(b.bidder_id).slice(0, 8)}…</span>
+                        <span className="text-sm font-semibold">€{Number(b.amount ?? 0)}</span>
+                      </div>
+                    ))}
+                    {(bids ?? []).length === 0 && (
+                      <div className="text-sm text-stone-500">No bids yet.</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
           </motion.div>
         )}
 

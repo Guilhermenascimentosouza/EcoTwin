@@ -42,6 +42,7 @@ const resources = {
       nav: {
         vault: 'Vault',
         market: 'Market',
+        auction: 'Auction',
         scan: 'Scan',
         stats: 'Stats',
         profile: 'Profile'
@@ -134,6 +135,7 @@ const resources = {
       nav: {
         vault: 'Coffre',
         market: 'Marché',
+        auction: 'Enchère',
         scan: 'Scanner',
         stats: 'Stats',
         profile: 'Profil'
@@ -226,6 +228,7 @@ const resources = {
       nav: {
         vault: 'Tresor',
         market: 'Markt',
+        auction: 'Auktion',
         scan: 'Scan',
         stats: 'Statistiken',
         profile: 'Profil'
